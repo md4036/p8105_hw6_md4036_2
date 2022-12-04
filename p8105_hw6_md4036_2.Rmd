@@ -1,0 +1,208 @@
+---
+title: "p8105_hw6_md4036_2"
+author: "Margaret"
+date: "2022-12-04"
+output: html_document
+---
+
+---
+title: "p8105_hw6_md4036"
+author: "Margaret"
+date: "2022-11-27"
+output: github_document
+---
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+```
+
+Create a city_state variable (e.g. “Baltimore, MD”), and a binary variable indicating whether the homicide is solved. Omit cities Dallas, TX; Phoenix, AZ; and Kansas City, MO – these don’t report victim race. Also omit Tulsa, AL – this is a data entry mistake. For this problem, limit your analysis those for whom victim_race is white or black. Be sure that victim_age is numeric.
+
+```{r}
+homicide1 =
+  read_csv(file = "./hw6data/homicide-data.csv")%>%
+  janitor::clean_names() %>%
+  unite(city_state, c(city, state), sep = ",")%>%
+  mutate(
+    resolved= ifelse (disposition %in% c("Closed without arrest","Open/No arrest"), 0, 1)) %>%
+  filter (
+    city_state != "Dallas,TX",
+    city_state != "Phoenix,AZ",
+    city_state != "Kansas City,MO", 
+    city_state != "Tulsa,AL", 
+    victim_race %in% c("Black", "White")) %>%
+mutate(victim_age = as.numeric(victim_age),
+       victim_sex = as.factor(victim_sex), 
+       victim_race = as.factor(victim_race))
+
+
+view(sample_n(homicide1, 300))
+```
+This dataset contains `r nrow(homicide1)` rows and `r ncol(homicide1)` columns. A `city_state` variable and a binary variable indicating whether the homicide was solved. Dallas, TX, Phoenix, AZ, Kansas City, MO, and Tulsa, AL were all omitted. Also, victim race was filtered for only Black and White. Victim age was also made to be a numeric variable. 
+
+```{r}
+baltimore_df = 
+  read_csv("./hw6data/homicide-data.csv") %>% 
+  janitor::clean_names() %>%
+  mutate(
+    resolved = as.numeric(disposition == "Closed by arrest"),
+    victim_age = as.numeric(victim_age)) %>%
+   filter (
+    city == "Baltimore",
+    victim_race %in% c("Black", "White"))%>%
+  select(resolved, victim_age, victim_race, victim_sex)
+
+
+view(baltimore_df)
+```
+
+For the city of Baltimore, MD, use the glm function to fit a logistic regression with resolved vs unresolved as the outcome and victim age, sex and race as predictors. Save the output of glm as an R object; apply the broom::tidy to this object; and obtain the estimate and confidence interval of the adjusted odds ratio for solving homicides comparing male victims to female victims keeping all other variables fixed.
+
+```{r}
+fit_logistic_baltimore = 
+  baltimore_df %>% 
+  glm(resolved ~ victim_age + victim_race + victim_sex, data = ., family =
+        binomial()) %>% 
+  broom::tidy()
+
+
+fit_logistic_baltimore %>%
+  mutate(OR = exp(estimate)) %>%
+  mutate (
+    CI_lower = exp(estimate - 1.96*std.error), 
+    CI_upper = exp(estimate + 1.96*std.error))%>%
+  select(term, estimate, OR, CI_lower, CI_upper) %>%
+  filter(term == "victim_sexMale")
+
+```
+
+Now, run glm for each of the cities in your dataset, and extract the adjusted odds ratio (and CI) for solving homicides comparing male victims to female victims. Do this within a “tidy” pipeline, making use of purrr::map, list columns, and unnest as necessary to create a dataframe with estimated ORs and CIs for each city.
+
+```{r}
+fit_logistic_homicide = function(homicide1) {
+  glm(resolved ~ victim_age + victim_race + victim_sex, data = homicide1, family =
+        binomial()) %>% 
+    broom::tidy() %>%
+    mutate(OR = exp(estimate)) %>%
+    mutate (
+      CI_lower = exp(estimate - 1.96*std.error), 
+      CI_upper = exp(estimate + 1.96*std.error))%>%
+  select(term, estimate, OR, CI_lower, CI_upper)%>%
+    filter (term == "victim_sexMale")
+}
+
+homicide_data_regression = 
+  homicide1 %>%
+  select(city_state, everything()) %>%
+  nest (data = uid:resolved) %>%
+  mutate (reg_result = purrr::map(.x = data,~fit_logistic_homicide(.x)))%>%
+  unnest(reg_result)
+
+homicide_data_regression %>% 
+    mutate(city_state = fct_reorder(city_state, OR)) %>% 
+    ggplot(aes(x = city_state, y = OR)) +
+    geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper)) + 
+    theme(axis.text.x = element_text(angle = 90, hjust=1)) +
+    labs(title = "Homicide Regression")
+```
+
+##Problem 3
+
+First, we load the librarys
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(modelr)
+```
+
+
+Load and clean the data for regression analysis (i.e. convert numeric to factor where appropriate, check for missing data, etc.).
+```{r}
+birthweight_df = 
+  read_csv(file = "./hw6data/birthweight.csv") %>%
+  janitor::clean_names() %>%
+  mutate(
+    babysex = as.factor(babysex),
+    frace = as.factor(frace),
+    malform = as.factor(malform),
+    mrace = as.factor(mrace))
+
+purrr::map(birthweight_df, ~sum(is.na(.)))
+
+```
+This dataset contains `r nrow(birthweight_df)` rows and `r  ncol(birthweight_df)` columns. There is no missing data. For the regression model, I chose variables like mothers age, multiple pregnancies (parity), and previous low birth weight infants. Gestational weeks, presence of malformations, moms race and financial income was also included in the model. 
+Propose a regression model for birthweight. This model may be based on a hypothesized structure for the factors that underly birthweight, on a data-driven model-building process, or a combination of the two. Describe your modeling process and show a plot of model residuals against fitted values – use add_predictions and add_residuals in making this plot.
+
+```{r}
+fit = 
+  lm(bwt ~ gaweeks + mrace + malform + parity + fincome + momage + pnumlbw, data = birthweight_df)
+
+residuals_df =
+  birthweight_df %>%
+  add_residuals(fit) %>%
+  add_predictions(fit) %>%
+  ggplot(aes(x = pred, y = resid)) + 
+  geom_point(alpha = 03)  + 
+  geom_smooth(se = FALSE) + 
+  labs(title = "Predicted vs residuals", 
+       x = "Predicted", 
+       y = "Residuals")
+
+```
+
+Compare your model to two others:
+1. One using length at birth and gestational age as predictors (main effects only)
+2. One using head circumference, length, sex, and all interactions (including the three-way interaction) between these
+
+Make this comparison in terms of the cross-validated prediction error; use crossv_mc and functions in purrr as appropriate.
+
+#One using length at birth and gestational age as predictors (main effects only)
+```{r}
+model_2 = lm(bwt ~ gaweeks + blength, data = birthweight_df)
+```
+#One using head circumference, length, sex, and all interactions (including the three-way interaction) between these
+
+```{r}
+model3 = lm(bwt ~ bhead + blength + babysex + bhead * blength + bhead * babysex + blength * babysex + bhead * blength * babysex, data = birthweight_df) %>%
+  broom::glance()
+```
+
+
+The following chunk uses cross-validation to comparer the predictive performance of the three models.
+
+```{r}
+cv_df = 
+  crossv_mc(birthweight_df, 100) %>%
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+
+cv_df = 
+  cv_df %>%
+  mutate(
+    model_fit_1 = map(.x = train, ~lm(bwt ~ gaweeks + momage + mrace + malform + parity + fincome + pnumlbw, data = .x)),
+    model_2 = map(.x = train, ~lm(bwt ~ gaweeks + blength, data = .x)),
+    model_3 = map(.x = train, ~lm(bwt ~ bhead + blength + babysex + bhead * blength + bhead * babysex + blength * babysex + bhead * blength * babysex, data = .x))) %>%
+      mutate(
+        rmse_model1 = map2_dbl(.x = model_fit_1, .y = test, ~rmse(model = .x, data = .y)), 
+        rmse_model2 = map2_dbl(.x = model_2, .y = test, ~rmse(model = .x, data = .y)), 
+        rmse_model3 = map2_dbl(.x = model_3, .y = test, ~rmse(model = .x, data = .y)))
+```
+
+A violin plot of RMSE
+```{r}
+cv_df %>%
+  select(starts_with("rmse")) %>%
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>%
+  ggplot(aes(x = model, y = rmse)) +
+  geom_violin()
+```
+
+From the violin chart, model 3 is the best fit. 
